@@ -4,7 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -23,9 +25,11 @@ type KubernetesSecret struct {
 	APIVersion string            `yaml:"apiVersion"`
 	Kind       string            `yaml:"kind"`
 	Metadata   Metadata          `yaml:"metadata"`
+	Type       string            `yaml:"type,omitempty"`
 	StringData map[string]string `yaml:"stringData,omitempty"`
 }
 
+// Metadata holds the metadata information for Kubernetes resources
 type Metadata struct {
 	Name      string `yaml:"name"`
 	Namespace string `yaml:"namespace"`
@@ -88,41 +92,73 @@ func main() {
 	for _, file := range files {
 		log.Printf("Processing file: %s\n", filepath.Base(file))
 
-		// Parse the YAML file
-		localSecret, err := parseYAMLSecret(file)
+		// Parse the YAML file (supports multiple secrets per file)
+		localSecrets, err := parseYAMLSecrets(file)
 		if err != nil {
 			log.Printf("Error parsing YAML file '%s': %v\n", filepath.Base(file), err)
 			continue
 		}
 
-		// Retrieve the deployed secret from Kubernetes
-		deployedSecret, err := getDeployedSecret(clientset, localSecret.Metadata.Namespace, localSecret.Metadata.Name)
-		if err != nil {
-			log.Printf("Error retrieving deployed secret '%s' in namespace '%s': %v\n", localSecret.Metadata.Name, localSecret.Metadata.Namespace, err)
-			continue
-		}
+		for _, localSecret := range localSecrets {
+			log.Printf("Comparing Secret: %s in Namespace: %s . . . \n", localSecret.Metadata.Name, localSecret.Metadata.Namespace)
 
-		// Compare secrets
-		differences := compareSecrets(localSecret, deployedSecret)
+			// Retrieve the deployed secret from Kubernetes
+			deployedSecret, err := getDeployedSecret(clientset, localSecret.Metadata.Namespace, localSecret.Metadata.Name)
+			if err != nil {
+				log.Printf("Error retrieving deployed secret '%s' in namespace '%s': %v\n", localSecret.Metadata.Name, localSecret.Metadata.Namespace, err)
+				continue
+			}
 
-		// Report differences
-		if len(differences) == 0 {
-			fmt.Printf("=== %s ===\nAll secrets match between the local file and the deployed Kubernetes secret.\n\n", filepath.Base(file))
-		} else {
-			globalDifferencesFound = true
-			fmt.Printf("=== %s ===\nDifferences found:\n", filepath.Base(file))
-			for _, diff := range differences {
-				switch {
-				case diff.Local != nil && diff.Deployed != nil:
-					fmt.Printf(" - [DIFFERENT] %s:\n", diff.Key)
-					fmt.Printf("   Local:     %s\n", *diff.Local)
-					fmt.Printf("   Deployed:  %s\n\n", *diff.Deployed)
-				case diff.Local != nil && diff.Deployed == nil:
-					fmt.Printf(" - [ONLY IN LOCAL] %s:\n", diff.Key)
-					fmt.Printf("   Value: %s\n\n", *diff.Local)
-				case diff.Local == nil && diff.Deployed != nil:
-					fmt.Printf(" - [ONLY IN DEPLOYED] %s:\n", diff.Key)
-					fmt.Printf("   Value: %s\n\n", *diff.Deployed)
+			// Compare secrets
+			differences := compareSecrets(localSecret, deployedSecret)
+
+			// Report differences
+			if len(differences) == 0 {
+				fmt.Printf("=== %s (Namespace: %s) ===\nAll secrets match between the local file and the deployed Kubernetes secret.\n\n", localSecret.Metadata.Name, localSecret.Metadata.Namespace)
+			} else {
+				globalDifferencesFound = true
+				fmt.Printf("=== %s (Namespace: %s) ===\nDifferences found:\n", localSecret.Metadata.Name, localSecret.Metadata.Namespace)
+
+				missingLocalKeys := make(map[string]string)
+				replaceLocalKeys := make(map[string]string)
+
+				for _, diff := range differences {
+					switch {
+					case diff.Local != nil && diff.Deployed != nil:
+						fmt.Printf(" - [DIFFERENT] %s:\n", diff.Key)
+						fmt.Printf("   Local:     %s\n", *diff.Local)
+						fmt.Printf("   Deployed:  %s\n\n", *diff.Deployed)
+						replaceLocalKeys[diff.Key] = *diff.Local
+					case diff.Local != nil && diff.Deployed == nil:
+						fmt.Printf(" - [ONLY IN LOCAL] %s:\n", diff.Key)
+						fmt.Printf("   Value: %s\n\n", *diff.Local)
+					case diff.Local == nil && diff.Deployed != nil:
+						fmt.Printf(" - [ONLY IN DEPLOYED] %s:\n", diff.Key)
+						fmt.Printf("   Value: %s\n\n", *diff.Deployed)
+						missingLocalKeys[diff.Key] = *diff.Deployed
+					}
+				}
+
+				// the new locals doenst need a copy snippet as is can de applied as it is
+				if len(replaceLocalKeys) > 0 {
+					fmt.Println("Merge following key-value pairs into your local file to match deployed secrets:")
+					fmt.Println("```yaml")
+					fmt.Println("stringData:")
+					for key, value := range replaceLocalKeys {
+						fmt.Printf("  %s: \"%s\"\n", key, value)
+					}
+					fmt.Println("```")
+					fmt.Println()
+				}
+				if len(missingLocalKeys) > 0 {
+					fmt.Println("Following should be added locally to make it match the deployed secrets:")
+					fmt.Println("```yaml")
+					fmt.Println("stringData:")
+					for key, value := range missingLocalKeys {
+						fmt.Printf("  %s: \"%s\"\n", key, value)
+					}
+					fmt.Println("```")
+					fmt.Println()
 				}
 			}
 		}
@@ -170,41 +206,59 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 	return clientset, nil
 }
 
-// parseYAMLSecret reads and parses a Kubernetes Secret YAML file
-func parseYAMLSecret(filePath string) (*KubernetesSecret, error) {
+// parseYAMLSecrets reads and parses a Kubernetes Secret YAML file, supporting multiple secrets per file
+func parseYAMLSecrets(filePath string) ([]KubernetesSecret, error) {
 	data, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("error reading file: %w", err)
 	}
 
-	var secret KubernetesSecret
-	err = yaml.Unmarshal(data, &secret)
-	if err != nil {
-		return nil, fmt.Errorf("error unmarshaling YAML: %w", err)
+	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	secrets := []KubernetesSecret{}
+
+	for {
+		var secret KubernetesSecret
+		err := decoder.Decode(&secret)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("error unmarshaling YAML: %w", err)
+		}
+
+		// Ensure required fields are present
+		if secret.Kind != "Secret" {
+			log.Printf("Skipping non-Secret kind: %s in file '%s'\n", secret.Kind, filepath.Base(filePath))
+			continue
+		}
+		if secret.Metadata.Name == "" {
+			log.Printf("Skipping secret with missing name in file '%s'\n", filepath.Base(filePath))
+			continue
+		}
+		if secret.Metadata.Namespace == "" {
+			log.Printf("Skipping secret with missing namespace in file '%s'\n", filepath.Base(filePath))
+			continue
+		}
+
+		if len(secret.StringData) == 0 {
+			log.Printf("Skipping secret '%s' in namespace '%s' with no 'stringData' in file '%s'\n", secret.Metadata.Name, secret.Metadata.Namespace, filepath.Base(filePath))
+			continue
+		}
+
+		secrets = append(secrets, secret)
 	}
 
-	// Ensure required fields are present
-	if secret.Kind != "Secret" {
-		return nil, fmt.Errorf("file '%s' is not a Kubernetes Secret", filepath.Base(filePath))
-	}
-	if secret.Metadata.Name == "" {
-		return nil, fmt.Errorf("secret name is missing in file '%s'", filepath.Base(filePath))
-	}
-	if secret.Metadata.Namespace == "" {
-		return nil, fmt.Errorf("namespace is missing in file '%s'", filepath.Base(filePath))
-	}
-
-	if len(secret.StringData) == 0 {
-		return nil, fmt.Errorf("no 'stringData' found in file '%s'", filepath.Base(filePath))
-	}
-
-	return &secret, nil
+	return secrets, nil
 }
 
 // getDeployedSecret retrieves a deployed Kubernetes Secret from the cluster
 func getDeployedSecret(clientset *kubernetes.Clientset, namespace, name string) (*DeployedSecret, error) {
 	secret, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), name, v1.GetOptions{})
 	if err != nil {
+		if errors.IsNotFound(err) {
+			// Secret does not exist in the deployed cluster
+			return nil, nil
+		}
 		return nil, fmt.Errorf("error fetching secret: %w", err)
 	}
 
@@ -228,7 +282,7 @@ func getDeployedSecret(clientset *kubernetes.Clientset, namespace, name string) 
 }
 
 // compareSecrets compares local stringData with deployed data and returns differences
-func compareSecrets(local *KubernetesSecret, deployed *DeployedSecret) []SecretDifference {
+func compareSecrets(local KubernetesSecret, deployed *DeployedSecret) []SecretDifference {
 	differences := []SecretDifference{}
 
 	// Create a set of all keys
