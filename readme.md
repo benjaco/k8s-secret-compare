@@ -7,6 +7,7 @@ It reads all "*secret*.yaml" and "*secret*.yml", and fetches it by the defined n
 ## Eg
 
 Processing file: kube-secret-staging.yaml
+```
 === kube-secret-staging.yaml ===
 Differences found:
 - [DIFFERENT] DISABLE_TIMING_LOGS:
@@ -14,6 +15,7 @@ Differences found:
   Deployed:  true
 
 Summary: Differences were found in some secrets.
+```
 
 ## Exit Codes
 The secret-compare tool uses exit codes to indicate the result of the comparison:
@@ -24,6 +26,6 @@ All secrets match. Indicates success.
 Exit Code 1:
 Differences were found. Indicates failure
 
-## mac Apple silicon precompiled (but untested)
+## Install
 
-## windows 
+[Mac Silicon and Windows precompiled here](https://github.com/benjaco/k8s-secret-compare/tags)
