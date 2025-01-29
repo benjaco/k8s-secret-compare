@@ -2,7 +2,7 @@
 
 The k8s-secret-compare tool allows you to compare local Kubernetes Secret YAML files (stringData) with the deployed secrets (data) in your Kubernetes cluster. 
 
-It reads all "*secret*.yaml" and "*secret*.yml", and fetches it by the defined namespace and name, pattern can be defined as an arg `secret-compare -pattern="*.yaml"`
+It reads all "\*secret\*.yaml" and "\*secret\*.yml", and fetches it by the defined namespace and name, pattern can be defined as an arg `secret-compare -pattern="*.yaml"`
 
 ## Eg
 
