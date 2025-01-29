@@ -24,6 +24,6 @@ All secrets match. Indicates success.
 Exit Code 1:
 Differences were found. Indicates failure
 
-## mac Apple silicon precompiled (but untested)
+## Install
 
-## windows 
+[Mac Silicon and Windows precompiled here](https://github.com/benjaco/k8s-secret-compare/tags)
