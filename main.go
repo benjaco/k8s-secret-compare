@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1" // Renamed for clarity
 	"k8s.io/client-go/kubernetes"
 	// Uncomment the following line if you need to use in-cluster config
 	// "k8s.io/client-go/rest"
@@ -128,7 +128,7 @@ func main() {
 						fmt.Printf(" - [DIFFERENT] %s:\n", diff.Key)
 						fmt.Printf("   Local:     %s\n", *diff.Local)
 						fmt.Printf("   Deployed:  %s\n\n", *diff.Deployed)
-						replaceLocalKeys[diff.Key] = *diff.Local
+						replaceLocalKeys[diff.Key] = *diff.Deployed
 					case diff.Local != nil && diff.Deployed == nil:
 						fmt.Printf(" - [ONLY IN LOCAL] %s:\n", diff.Key)
 						fmt.Printf("   Value: %s\n\n", *diff.Local)
@@ -145,7 +145,7 @@ func main() {
 					fmt.Println("```yaml")
 					fmt.Println("stringData:")
 					for key, value := range replaceLocalKeys {
-						fmt.Printf("  %s: \"%s\"\n", key, value)
+						fmt.Printf("  %s: %s\n", key, formatYAMLValue(value))
 					}
 					fmt.Println("```")
 					fmt.Println()
@@ -155,7 +155,7 @@ func main() {
 					fmt.Println("```yaml")
 					fmt.Println("stringData:")
 					for key, value := range missingLocalKeys {
-						fmt.Printf("  %s: \"%s\"\n", key, value)
+						fmt.Printf("  %s: %s\n", key, formatYAMLValue(value))
 					}
 					fmt.Println("```")
 					fmt.Println()
@@ -172,6 +172,24 @@ func main() {
 		fmt.Println("Summary: All secrets match across environments.")
 		os.Exit(0) // Indicates success
 	}
+}
+
+// formatYAMLValue formats the value based on whether it's multiline.
+// If multiline, it uses the |- indicator; otherwise, it quotes the value.
+func formatYAMLValue(value string) string {
+	if strings.Contains(value, "\n") {
+		// Use |- for multiline strings
+		// Indent each line by 4 spaces
+		lines := strings.Split(value, "\n")
+		var formattedLines []string
+		for _, line := range lines {
+			formattedLines = append(formattedLines, "    "+line)
+		}
+		return "|-\n" + strings.Join(formattedLines, "\n")
+	}
+	// For single-line strings, quote the value
+	escapedValue := strings.ReplaceAll(value, "\"", "\\\"") // Escape double quotes
+	return fmt.Sprintf("\"%s\"", escapedValue)
 }
 
 // parsePatterns processes the provided pattern string and returns a slice of glob patterns
@@ -253,7 +271,7 @@ func parseYAMLSecrets(filePath string) ([]KubernetesSecret, error) {
 
 // getDeployedSecret retrieves a deployed Kubernetes Secret from the cluster
 func getDeployedSecret(clientset *kubernetes.Clientset, namespace, name string) (*DeployedSecret, error) {
-	secret, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), name, v1.GetOptions{})
+	secret, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Secret does not exist in the deployed cluster
