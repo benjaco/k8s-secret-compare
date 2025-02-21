@@ -1,6 +1,6 @@
 # How to Use
 
-The k8s-secret-compare tool allows you to compare local Kubernetes Secret YAML files (stringData) with the deployed secrets (data) in your Kubernetes cluster. 
+The k8s-secret-compare tool allows you to compare local Kubernetes Secret & ConfigMap YAML files (stringData) with the deployed secrets/configmaps (data) in your Kubernetes cluster. 
 
 It reads all "\*secret\*.yaml" and "\*secret\*.yml", and fetches it by the defined namespace and name, pattern can be defined as an arg `secret-compare -pattern="*.yaml"`
 
@@ -21,7 +21,7 @@ Summary: Differences were found in some secrets.
 The secret-compare tool uses exit codes to indicate the result of the comparison:
 
 Exit Code 0:
-All secrets match. Indicates success.
+All secrets & configmaps match. Indicates success.
 
 Exit Code 1:
 Differences were found. Indicates failure
